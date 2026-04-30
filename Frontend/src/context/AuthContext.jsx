@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { env } from '../config/env';
-import { postJson } from '../lib/api';
+import { getJson, postJson } from '../lib/api';
 import { clearStoredSession, getStoredSession, setStoredSession } from '../lib/storage';
 
 const AuthContext = createContext(null);
@@ -14,14 +14,20 @@ function inferFallbackRole(email, preferredRole) {
 }
 
 function buildSession(payload, fallback = {}) {
+  const role = payload.role || (payload.account_type === 'user' ? 'user' : null);
+  const demoMode = Boolean(payload.demo_mode || fallback.demoMode);
+  if (!role && !demoMode) {
+    throw new Error('Invalid session payload from server.');
+  }
+  const accountType = payload.account_type || (role === 'user' ? 'user' : 'admin');
   return {
-    id: payload.id || `${fallback.role || 'user'}-${Date.now()}`,
-    email: payload.email || fallback.email,
-    name: payload.name || fallback.email,
-    role: payload.role || inferFallbackRole(fallback.email, fallback.role),
-    accountType: payload.account_type || (fallback.role === 'user' ? 'user' : 'admin'),
-    pharmacyName: fallback.role === 'pharmacy_admin' ? env.demoUsers.pharmacy_admin.pharmacyName : null,
-    demoMode: Boolean(payload.demo_mode),
+    id: payload.id || (demoMode ? 'demo-user' : ''),
+    email: payload.email || fallback.email || '',
+    name: payload.name || fallback.email || 'ADWETY User',
+    role: role || fallback.role || 'user',
+    accountType,
+    pharmacyName: role === 'pharmacy_admin' ? (payload.pharmacy_name || fallback.pharmacyName || '') : null,
+    demoMode,
     token: null,
     emailVerified: Boolean(payload.email_verified),
     phoneNumber: payload.phone_number || fallback.phoneNumber || '',
@@ -30,11 +36,34 @@ function buildSession(payload, fallback = {}) {
 }
 
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(() => getStoredSession());
+  const [session, setSession] = useState(null);
   const [isBooting, setIsBooting] = useState(true);
 
   useEffect(() => {
-    setIsBooting(false);
+    let cancelled = false;
+
+    async function hydrateSession() {
+      try {
+        const marker = getStoredSession();
+        if (!marker) return;
+        const result = await getJson('/profile/me');
+        if (cancelled) return;
+        const profile = result?.data || {};
+        const nextSession = buildSession(profile, { email: profile.email, role: profile.role });
+        setSession(nextSession);
+        setStoredSession({ authenticated: true });
+      } catch (_error) {
+        if (!cancelled) {
+          setSession(null);
+          clearStoredSession();
+        }
+      } finally {
+        if (!cancelled) setIsBooting(false);
+      }
+    }
+
+    hydrateSession();
+    return () => { cancelled = true; };
   }, []);
 
   const value = useMemo(() => ({
@@ -50,10 +79,10 @@ export function AuthProvider({ children }) {
         }
         const nextSession = buildSession(payload, { email, role });
         setSession(nextSession);
-        setStoredSession(nextSession);
+        setStoredSession({ authenticated: true });
         return nextSession;
       } catch (backendError) {
-        if (!env.enableDemoAuth) throw backendError;
+        if (!env.enableDemoAuth || env.isProduction) throw backendError;
 
         const preset = env.demoUsers[role];
         if (!preset || !preset.password) throw backendError;
@@ -63,10 +92,11 @@ export function AuthProvider({ children }) {
           email: preset.email,
           name: preset.name,
           role,
+          demo_mode: true,
           token: null,
-        }, { email: preset.email, role });
+        }, { email: preset.email, role, demoMode: true, pharmacyName: preset.pharmacyName });
         setSession(nextSession);
-        setStoredSession(nextSession);
+        setStoredSession({ authenticated: true });
         return nextSession;
       }
     },
@@ -75,7 +105,7 @@ export function AuthProvider({ children }) {
       const payload = result?.data || {};
       const nextSession = buildSession(payload, { email, role });
       setSession(nextSession);
-      setStoredSession(nextSession);
+      setStoredSession({ authenticated: true });
       return nextSession;
     },
     async register({ fullName, email, password, phoneNumber }) {
@@ -86,10 +116,10 @@ export function AuthProvider({ children }) {
         phone_number: phoneNumber,
       });
       const payload = result?.data || {};
-      if (payload.requires_otp) return { ...payload, email, role: 'user' };
+      if (payload.requires_otp || payload.queued) return { ...payload, email, role: 'user' };
       const nextSession = buildSession(payload, { email, role: 'user' });
       setSession(nextSession);
-      setStoredSession(nextSession);
+      setStoredSession({ authenticated: true });
       return nextSession;
     },
     async verifyRegisterOtp({ otpToken, otp, email }) {
@@ -97,7 +127,7 @@ export function AuthProvider({ children }) {
       const payload = result?.data || {};
       const nextSession = buildSession(payload, { email, role: 'user' });
       setSession(nextSession);
-      setStoredSession(nextSession);
+      setStoredSession({ authenticated: true });
       return nextSession;
     },
     async requestPasswordReset({ email }) {
@@ -110,7 +140,7 @@ export function AuthProvider({ children }) {
         new_password: newPassword,
       };
       if (otpToken) body.otp_token = otpToken;
-      else body.email = email;
+      else throw new Error('OTP token is required to reset your password.');
       const result = await postJson('/auth/reset-password', body);
       return result?.data || {};
     },
@@ -127,7 +157,7 @@ export function AuthProvider({ children }) {
         phoneVerified: Boolean(profile.phone_verified),
       };
       setSession(nextSession);
-      setStoredSession(nextSession);
+      setStoredSession({ authenticated: true });
       return nextSession;
     },
     logout() {

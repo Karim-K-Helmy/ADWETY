@@ -44,6 +44,7 @@ export default function PrescriptionScannerPage() {
 
     const formData = new FormData();
     formData.append('prescription_image', file);
+    formData.append('consent_to_ai_processing', 'true');
     setDone(false);
     setScanResult(null);
     setError('');

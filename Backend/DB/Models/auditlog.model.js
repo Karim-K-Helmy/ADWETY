@@ -9,6 +9,8 @@ const schema = withJsonTransform(new mongoose.Schema({
   path: { type: String, required: true },
   statusCode: { type: Number, default: 0 },
   ip: { type: String, default: '' },
+  success: { type: Boolean, default: true },
+  userAgent: { type: String, default: '', trim: true },
   createdAt: { type: Date, default: Date.now },
 }));
 

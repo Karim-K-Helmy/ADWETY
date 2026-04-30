@@ -6,7 +6,7 @@ function getCookie(name) {
 }
 
 function getCsrfToken() {
-  return getCookie('adwety_csrf');
+  return getCookie(env.csrfCookieName);
 }
 
 async function apiRequest(path, options = {}) {

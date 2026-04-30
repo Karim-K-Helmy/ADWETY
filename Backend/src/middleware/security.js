@@ -43,26 +43,35 @@ function parseCookies(req, _res, next) {
   next();
 }
 
-function makeCsrfToken() {
-  return crypto.randomBytes(32).toString('hex');
+function signCsrfToken(randomPart, authToken) {
+  return crypto.createHmac('sha256', env.jwtSecret).update(`${authToken}:${randomPart}`).digest('hex');
+}
+
+function makeCsrfToken(authToken) {
+  const randomPart = crypto.randomBytes(32).toString('hex');
+  return `${randomPart}.${signCsrfToken(randomPart, authToken)}`;
+}
+
+function isValidCsrfToken(csrfToken, authToken) {
+  const [randomPart = '', signature = ''] = String(csrfToken || '').split('.');
+  if (!randomPart || !signature || !authToken) return false;
+  return safeTokenEqual(signature, signCsrfToken(randomPart, authToken));
+}
+
+function cookieOptions({ httpOnly }) {
+  return {
+    httpOnly,
+    secure: env.cookieSecure,
+    sameSite: env.cookieSameSite,
+    maxAge: env.jwtCookieMaxAgeMs,
+    path: '/',
+  };
 }
 
 function setAuthCookies(res, token) {
-  const csrfToken = makeCsrfToken();
-  res.cookie(env.authCookieName, token, {
-    httpOnly: true,
-    secure: env.cookieSecure,
-    sameSite: env.cookieSameSite,
-    maxAge: 2 * 60 * 60 * 1000,
-    path: '/',
-  });
-  res.cookie(env.csrfCookieName, csrfToken, {
-    httpOnly: false,
-    secure: env.cookieSecure,
-    sameSite: env.cookieSameSite,
-    maxAge: 2 * 60 * 60 * 1000,
-    path: '/',
-  });
+  const csrfToken = makeCsrfToken(token);
+  res.cookie(env.authCookieName, token, cookieOptions({ httpOnly: true }));
+  res.cookie(env.csrfCookieName, csrfToken, cookieOptions({ httpOnly: false }));
   return csrfToken;
 }
 
@@ -82,8 +91,32 @@ function safeTokenEqual(leftValue, rightValue) {
   return crypto.timingSafeEqual(leftDigest, rightDigest);
 }
 
+const csrfExemptPublicAuthPaths = new Set([
+  '/api/v1/auth/register',
+  '/api/v1/auth/register/verify-otp',
+  '/api/v1/auth/login',
+  '/api/v1/auth/login/verify-otp',
+  '/api/v1/auth/forgot-password',
+  '/api/v1/auth/reset-password',
+]);
+
+function normalizeRequestPath(req) {
+  const path = String(req.path || req.originalUrl || '').split('?')[0].replace(/\/+$/, '');
+  return path || '/';
+}
+
+function isPublicAuthCsrfExempt(req) {
+  return csrfExemptPublicAuthPaths.has(normalizeRequestPath(req));
+}
+
 function csrfProtection(req, _res, next) {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+
+  // Public auth bootstrap endpoints must remain usable when a browser still has
+  // stale auth cookies from an older build/session. They are protected by CORS,
+  // JSON-only requests, rate limiting, generic errors, and OTP where applicable.
+  // Authenticated state-changing endpoints still require CSRF.
+  if (isPublicAuthCsrfExempt(req)) return next();
 
   const hasCookieAuth = Boolean(req.cookies?.[env.authCookieName]);
   const hasBearerAuth = Boolean((req.headers.authorization || '').startsWith('Bearer '));
@@ -91,11 +124,13 @@ function csrfProtection(req, _res, next) {
 
   const cookieToken = req.cookies?.[env.csrfCookieName];
   const headerToken = req.headers['x-csrf-token'];
-  if (!safeTokenEqual(cookieToken, headerToken)) {
+  const authToken = req.cookies?.[env.authCookieName] || String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!safeTokenEqual(cookieToken, headerToken) || !isValidCsrfToken(cookieToken, authToken)) {
     return next(new AppError('CSRF token validation failed', 403));
   }
   return next();
 }
+
 
 function hashValue(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
@@ -103,7 +138,7 @@ function hashValue(value) {
 
 function getRateLimitKey(req) {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
-  return `${ip}:${req.originalUrl.split('?')[0]}`.slice(0, 500);
+  return `${ip}:${req.method}:${req.originalUrl.split('?')[0]}`.slice(0, 500);
 }
 
 function createRateLimiter({ windowMs = 15 * 60 * 1000, max = 100, message = 'Too many requests', keyGenerator = null } = {}) {
@@ -152,9 +187,16 @@ function createEmailRateLimiter({ windowMs = 60 * 60 * 1000, max = 5, message = 
   };
 }
 
-const apiLimiter = createRateLimiter({ max: 300, windowMs: 15 * 60 * 1000 });
+const apiLimiter = createRateLimiter({ max: 240, windowMs: 15 * 60 * 1000 });
 const authLimiter = createRateLimiter({ max: 10, windowMs: 15 * 60 * 1000, message: 'Too many login attempts. Please try again later.' });
 const uploadLimiter = createRateLimiter({ max: 30, windowMs: 15 * 60 * 1000, message: 'Too many upload requests. Please try again later.' });
+const dataScrapingLimiter = createRateLimiter({ max: 30, windowMs: 60 * 1000, message: 'Too many data requests. Please slow down.' });
+const notificationPollingLimiter = createRateLimiter({
+  max: 15,
+  windowMs: 60 * 1000,
+  message: 'Too many notification requests. Please slow down.',
+  keyGenerator: (req) => `notifications:${req.authUser?._id || req.ip || 'anonymous'}`,
+});
 const otpEmailLimiter = createEmailRateLimiter({ max: 3, windowMs: 60 * 60 * 1000 });
 const authEmailLimiter = createEmailRateLimiter({ max: 5, windowMs: 15 * 60 * 1000, message: 'Too many attempts for this account. Please try again later.' });
 const scanUserLimiter = createRateLimiter({
@@ -176,6 +218,8 @@ module.exports = {
   apiLimiter,
   authLimiter,
   uploadLimiter,
+  dataScrapingLimiter,
+  notificationPollingLimiter,
   otpEmailLimiter,
   authEmailLimiter,
   scanUserLimiter,

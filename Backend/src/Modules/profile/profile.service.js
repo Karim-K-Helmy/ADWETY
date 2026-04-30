@@ -58,7 +58,7 @@ async function requestEmailUpdate(authUser = null, authMeta = null, payload = {}
   if (nextEmail === account.email) throw new AppError('This email is already attached to your account', 409);
 
   const existing = await findAccountByEmail(nextEmail);
-  if (existing) throw new AppError('Email already registered', 409);
+  if (existing) throw new AppError('Email cannot be used', 409);
 
   return createOtpChallenge({
     account,
@@ -80,7 +80,7 @@ async function confirmEmailUpdate(authUser = null, authMeta = null, payload = {}
   const nextEmail = sanitizeEmail(challenge.metadata?.targetEmail || challenge.email);
   if (!nextEmail) throw new AppError('Target email is missing from OTP request', 400);
   const existing = await findAccountByEmail(nextEmail);
-  if (existing && String(existing.account._id) !== String(account._id)) throw new AppError('Email already registered', 409);
+  if (existing && String(existing.account._id) !== String(account._id)) throw new AppError('Email cannot be used', 409);
 
   account.email = nextEmail;
   account.isEmailVerified = true;

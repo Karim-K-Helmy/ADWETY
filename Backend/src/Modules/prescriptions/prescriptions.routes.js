@@ -7,7 +7,7 @@ const auditAction = require('../../middleware/audit');
 const controller = require('./prescriptions.controller');
 const { scanSchema } = require('./prescriptions.validation');
 
-router.post('/scan', auth, uploadLimiter, scanUserLimiter, upload.single('prescription_image'), validate(scanSchema), auditAction('prescription.scan'), controller.scan);
-router.post('/scan-auth', auth, uploadLimiter, scanUserLimiter, upload.single('prescription_image'), validate(scanSchema), auditAction('prescription.scan'), controller.scan);
+router.post('/scan', auth, uploadLimiter, scanUserLimiter, ...upload.secureSingle('prescription_image'), validate(scanSchema), auditAction('prescription.scan'), controller.scan);
+router.post('/scan-auth', auth, uploadLimiter, scanUserLimiter, ...upload.secureSingle('prescription_image'), validate(scanSchema), auditAction('prescription.scan'), controller.scan);
 
 module.exports = router;

@@ -11,10 +11,21 @@ function publicPrescriptionId(id) {
   return crypto.createHmac('sha256', env.jwtSecret).update(String(id)).digest('hex').slice(0, 32);
 }
 
-async function scanPrescription({ file, userId, mockText }) {
+function sanitizeMockText(value = '') {
+  return String(value)
+    .replace(/ignore\s+all\s+previous/gi, '[filtered]')
+    .replace(/system\s+prompt/gi, '[filtered]')
+    .replace(/developer\s+message/gi, '[filtered]')
+    .slice(0, 5000);
+}
+
+async function scanPrescription({ file, userId, mockText, consentToAiProcessing = false }) {
   if (!userId) throw new AppError('Unauthorized', 401);
+  if (!env.allowAiPrescriptionProcessing) throw new AppError('Prescription AI processing is disabled.', 403);
+  if (!consentToAiProcessing) throw new AppError('AI processing consent is required for prescription scans.', 422);
   if (mockText && env.nodeEnv === 'production') throw new AppError('mock_text is disabled in production', 403);
-  if (!file && !mockText) throw new AppError('Prescription image/PDF or mock_text is required', 422);
+  const safeMockText = mockText ? sanitizeMockText(mockText) : '';
+  if (!file && !safeMockText) throw new AppError('Prescription image/PDF or mock_text is required', 422);
   if (file?.buffer) validateUploadedFileContent(file);
 
   const imageUrl = file?.buffer ? saveBuffer(file.buffer, file.originalname) : null;
@@ -22,19 +33,19 @@ async function scanPrescription({ file, userId, mockText }) {
     userId,
     imageUrl,
     status: 'processing',
-    extractedText: mockText || '',
+    extractedText: safeMockText || '',
   });
 
   let result;
   try {
     result = await extractPrescription({
-      fileBuffer: file?.buffer || Buffer.from(mockText || ''),
+      fileBuffer: file?.buffer || Buffer.from(safeMockText || ''),
       mimeType: file?.mimetype || 'text/plain',
-      fallbackText: mockText || '',
+      fallbackText: safeMockText || '',
     });
   } catch (error) {
     prescription.status = 'failed';
-    prescription.extractedText = mockText || '';
+    prescription.extractedText = safeMockText || '';
     await prescription.save();
     throw error;
   }

@@ -3,7 +3,7 @@ const { isValidObjectId } = require('../../utils/helpers');
 
 const statusSchema = z.enum(['pending', 'approved', 'rejected', 'active', 'inactive']);
 const objectIdSchema = z.string().refine(isValidObjectId, 'Invalid ObjectId format');
-const safeText = (min = 0, max = 2000) => z.string().min(min).max(max).refine((value) => !/<[^>]*>/g.test(value), 'HTML is not allowed');
+const safeText = (min = 0, max = 2000) => z.string().min(min).max(max).refine((value) => !/<[^>]*>|javascript:|on\w+\s*=|data:/i.test(value), 'Invalid characters detected');
 const safeUrl = z.string().url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), 'Only HTTP/HTTPS URLs are allowed');
 
 const listSchema = z.object({

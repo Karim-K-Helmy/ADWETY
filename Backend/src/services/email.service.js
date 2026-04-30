@@ -24,9 +24,16 @@ function getTransporter() {
   if (cachedTransporter) return cachedTransporter;
 
   if (env.mailDriver === 'console') {
+    if (['production', 'staging'].includes(env.nodeEnv)) {
+      throw new AppError('Mail service is not available.', 503);
+    }
     cachedTransporter = {
       async sendMail(payload) {
-        console.log('[ADWETY MAIL CONSOLE]', payload);
+        console.log('[ADWETY MAIL CONSOLE]', {
+          to: maskDestination(payload.to),
+          subject: payload.subject,
+          messageId: `console-${Date.now()}`,
+        });
         return { messageId: `console-${Date.now()}` };
       },
     };
@@ -34,18 +41,18 @@ function getTransporter() {
   }
 
   if (env.mailDriver !== 'smtp') {
-    throw new AppError('Mail driver is not configured. Set MAIL_DRIVER=smtp or MAIL_DRIVER=console.', 503);
+    throw new AppError('Mail service is not available.', 503);
   }
 
   if (!env.smtpHost || !env.smtpPort || !env.smtpUser || !env.smtpPass) {
-    throw new AppError('SMTP settings are incomplete. Check SMTP_HOST, SMTP_PORT, SMTP_USER and SMTP_PASS in Backend/.env.', 503);
+    throw new AppError('Mail service is not available.', 503);
   }
 
   let nodemailer;
   try {
     nodemailer = require('nodemailer');
   } catch (_error) {
-    throw new AppError('Nodemailer is not installed. Run npm install inside Backend.', 503);
+    throw new AppError('Mail service is not available.', 503);
   }
 
   cachedTransporter = nodemailer.createTransport({
@@ -213,14 +220,14 @@ async function sendMail(payload) {
     const isConnectionError = ['ECONNECTION', 'ETIMEDOUT', 'ESOCKET', 'ECONNREFUSED'].includes(error.code);
 
     if (isAuthError) {
-      throw new AppError('SMTP authentication failed. For Gmail use a valid 16-character App Password in SMTP_PASS, not the normal Gmail password.', 503);
+      throw new AppError('Mail service is not available.', 503);
     }
 
     if (isConnectionError) {
-      throw new AppError('SMTP connection failed. Check SMTP_HOST, SMTP_PORT, SMTP_SECURE and network access.', 503);
+      throw new AppError('Mail service is not available.', 503);
     }
 
-    throw new AppError(`Unable to send OTP email: ${message}`, 503);
+    throw new AppError('Mail service is not available.', 503);
   }
 }
 
@@ -229,14 +236,15 @@ async function sendSms({ to, message }) {
     provider: env.smsProvider,
     from: env.smsFrom,
     to,
-    message,
+    message: env.nodeEnv === 'production' ? '[redacted]' : message,
   });
   return true;
 }
 
 async function sendOtp({ email, phoneNumber, otp, purpose }) {
-  if (env.showDevOtp) {
-    console.log('[ADWETY DEV OTP]', { email: maskDestination(email), phoneNumber, purpose, otp });
+  if (env.showDevOtp && !['production', 'staging'].includes(env.nodeEnv)) {
+    const maskedOtp = String(otp).slice(0, 2) + '*'.repeat(Math.max(0, String(otp).length - 2));
+    console.log('[ADWETY DEV OTP]', { email: maskDestination(email), phoneNumber: phoneNumber ? maskDestination(phoneNumber) : '', purpose, otpHint: maskedOtp });
   }
 
   const normalizedPurpose = String(purpose || '').replace(/_/g, ' ');

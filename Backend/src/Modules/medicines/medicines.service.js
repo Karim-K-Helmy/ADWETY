@@ -72,7 +72,12 @@ async function assertInventoryOwnership(inventory, authUser, authMeta) {
   }
 }
 
-async function listMedicines({ q = '', page = 1, limit = 50, category, pharmacy_id, stock_status }, userId = null) {
+async function listMedicines({ q = '', page = 1, limit = 50, category, pharmacy_id, stock_status }, userId = null, authUser = null, authMeta = null) {
+  const scope = getPharmacyScope(authUser, authMeta);
+  if (scope && pharmacy_id && String(pharmacy_id) !== String(scope)) {
+    throw new AppError('Forbidden: cross-pharmacy access denied', 403);
+  }
+  const effectivePharmacyId = scope || pharmacy_id;
   const pagination = makePagination({ page, limit });
   const search = String(q || '').trim();
   const safeSearch = escapeRegex(search.slice(0, 80));
@@ -90,7 +95,7 @@ async function listMedicines({ q = '', page = 1, limit = 50, category, pharmacy_
 
   const drugIds = drugs.map((drug) => drug._id);
   const inventoryFilter = { drugId: { $in: drugIds } };
-  if (pharmacy_id) inventoryFilter.pharmacyId = toObjectId(pharmacy_id);
+  if (effectivePharmacyId) inventoryFilter.pharmacyId = toObjectId(effectivePharmacyId);
 
   const inventory = await Inventory.find(inventoryFilter)
     .populate('pharmacyId', 'name address latitude longitude rating status phone email workingHours googleMapsUrl')
@@ -98,7 +103,7 @@ async function listMedicines({ q = '', page = 1, limit = 50, category, pharmacy_
 
   let rows = drugs.flatMap((drug) => {
     const items = inventory.filter((entry) => String(entry.drugId) === String(drug._id));
-    if (!items.length && !pharmacy_id) return [normalizeMedicine(drug)];
+    if (!items.length && !effectivePharmacyId) return [normalizeMedicine(drug)];
     return items.map((item) => normalizeMedicine(drug, item));
   });
 
@@ -107,11 +112,12 @@ async function listMedicines({ q = '', page = 1, limit = 50, category, pharmacy_
   return rows;
 }
 
-async function getMedicineById(id) {
+async function getMedicineById(id, authUser = null, authMeta = null) {
   validateObjectId(id);
+  const scope = getPharmacyScope(authUser, authMeta);
   const drug = await Drug.findById(id).populate('categoryId', 'name').lean();
   if (!drug) throw new AppError('Medicine not found', 404);
-  const inventory = await Inventory.find({ drugId: drug._id }).populate('pharmacyId', 'name address latitude longitude rating imageUrl').lean();
+  const inventory = await Inventory.find({ drugId: drug._id, ...(scope ? { pharmacyId: scope } : {}) }).populate('pharmacyId', 'name address latitude longitude rating imageUrl').lean();
   return {
     id: drug._id.toString(),
     name: drug.name,

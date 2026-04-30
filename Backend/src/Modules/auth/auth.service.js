@@ -14,9 +14,14 @@ const PASSWORD_RESET_GENERIC_RESPONSE = {
   queued: true,
   message: 'If this account exists, an OTP will be sent to the registered email.',
 };
+const REGISTER_GENERIC_RESPONSE = {
+  queued: true,
+  message: 'If this email can be registered, verification instructions will be sent.',
+};
+const DUMMY_PASSWORD_HASH = '$2a$10$C6UzMDM.H6dfI/f/IKcEeOZ6BYWYHEmx5sBNj0wf48MhLDAUfKHCi';
 
 function hashValue(value) {
-  return crypto.createHash('sha256').update(String(value)).digest('hex');
+  return crypto.createHmac('sha256', env.otpHashSecret).update(String(value)).digest('hex');
 }
 
 function assertPasswordLength(password) {
@@ -59,8 +64,8 @@ function serializeAccount(account, { token = null, role = 'user', accountType = 
 async function findAccountByEmail(email) {
   const sanitized = sanitizeEmail(email);
   const [user, admin] = await Promise.all([
-    User.findOne({ email: sanitized }),
-    Admin.findOne({ email: sanitized }),
+    User.findOne({ email: sanitized }).select('+passwordHash'),
+    Admin.findOne({ email: sanitized }).select('+passwordHash'),
   ]);
 
   if (user && admin) {
@@ -125,23 +130,30 @@ async function createOtpChallenge({ account, accountType, role, purpose, email =
   }
 }
 
-async function findChallengeForOtp({ otpToken, email, purpose }) {
-  const base = { purpose, consumedAt: null };
-  if (otpToken) {
-    return OtpChallenge.findOneAndUpdate(
-      { ...base, tokenHash: hashValue(otpToken) },
-      { $inc: { attempts: 1 } },
-      { new: true }
-    );
-  }
+function buildOtpSelector({ otpToken, email, purpose }) {
+  const base = {
+    purpose,
+    consumedAt: null,
+    expiresAt: { $gt: new Date() },
+    $expr: { $lt: ['$attempts', '$maxAttempts'] },
+  };
+
+  if (otpToken) return { ...base, tokenHash: hashValue(otpToken) };
 
   const sanitizedEmail = sanitizeEmail(email);
   if (!sanitizedEmail) return null;
-  const challenge = await OtpChallenge.findOne(base).where('email').equals(sanitizedEmail).sort({ createdAt: -1 });
-  if (!challenge) return null;
-  challenge.attempts += 1;
-  await challenge.save();
-  return challenge;
+  return { ...base, email: sanitizedEmail };
+}
+
+async function findChallengeForOtp({ otpToken, email, purpose }) {
+  const selector = buildOtpSelector({ otpToken, email, purpose });
+  if (!selector) return null;
+
+  return OtpChallenge.findOneAndUpdate(
+    selector,
+    { $inc: { attempts: 1 } },
+    { new: true, sort: { createdAt: -1 } }
+  );
 }
 
 async function consumeOtpChallenge({ otpToken = null, email = null, otp, purpose }) {
@@ -149,22 +161,28 @@ async function consumeOtpChallenge({ otpToken = null, email = null, otp, purpose
   const challenge = await findChallengeForOtp({ otpToken, email, purpose });
 
   if (!challenge) throw new AppError('Invalid or expired OTP request', 400);
-  if (challenge.expiresAt.getTime() <= Date.now()) throw new AppError('OTP expired. Please request a new code.', 400);
-  if (challenge.attempts > challenge.maxAttempts) throw new AppError('Too many OTP attempts. Please request a new code.', 429);
 
   const matches = secureCompare(hashValue(otp), challenge.otpHash);
   if (!matches) throw new AppError('Invalid OTP code', 400);
 
-  challenge.consumedAt = new Date();
-  await challenge.save();
-  return challenge;
+  const consumed = await OtpChallenge.findOneAndUpdate(
+    { _id: challenge._id, consumedAt: null },
+    { $set: { consumedAt: new Date() } },
+    { new: true }
+  );
+
+  if (!consumed) throw new AppError('OTP request was already used', 400);
+  return consumed;
 }
 
 async function registerUser(payload) {
   assertPasswordLength(payload.password);
   const email = sanitizeEmail(payload.email);
   const [userExists, adminExists] = await Promise.all([User.findOne({ email }), Admin.findOne({ email })]);
-  if (userExists || adminExists) throw new AppError('Email already registered', 409);
+  if (userExists || adminExists) {
+    await bcrypt.compare(payload.password, DUMMY_PASSWORD_HASH).catch(() => {});
+    return REGISTER_GENERIC_RESPONSE;
+  }
 
   const passwordHash = await bcrypt.hash(payload.password, env.bcryptSaltRounds);
   const user = await User.create({
@@ -209,13 +227,15 @@ async function loginUser(payload) {
   const email = sanitizeEmail(payload.email);
   const invalid = new AppError('Invalid email or password', 401);
   const found = await findAccountByEmail(email);
-  if (!found) throw invalid;
+
+  if (!found) {
+    await bcrypt.compare(payload.password, DUMMY_PASSWORD_HASH).catch(() => {});
+    throw invalid;
+  }
 
   const { account, accountType, role } = found;
-  if (account.isActive === false) throw new AppError('Account is not active or not verified yet', 403);
-
   const ok = await bcrypt.compare(payload.password, account.passwordHash);
-  if (!ok) throw invalid;
+  if (!ok || account.isActive === false) throw invalid;
 
   if (env.requireLoginOtp) {
     return createOtpChallenge({ account, accountType, role, purpose: 'login' });
@@ -257,13 +277,14 @@ async function forgotPassword(payload) {
 
 async function resetPassword(payload) {
   assertPasswordLength(payload.new_password);
-  const challenge = await consumeOtpChallenge({ otpToken: payload.otp_token, email: payload.email, otp: payload.otp, purpose: 'password_reset' });
+  const challenge = await consumeOtpChallenge({ otpToken: payload.otp_token, otp: payload.otp, purpose: 'password_reset' });
   const model = challenge.accountType === 'admin' ? Admin : User;
   const account = await model.findById(challenge.accountId);
   if (!account) throw new AppError('Account not found', 404);
 
   account.passwordHash = await bcrypt.hash(payload.new_password, env.bcryptSaltRounds);
   account.passwordChangedAt = new Date();
+  await OtpChallenge.deleteMany({ accountId: account._id, consumedAt: null }).catch(() => {});
   account.isActive = true;
   account.isEmailVerified = true;
   await account.save();

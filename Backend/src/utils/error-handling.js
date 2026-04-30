@@ -15,7 +15,7 @@ function notFoundHandler(_req, _res, next) {
 
 function globalErrorHandler(error, req, res, _next) {
   const statusCode = error.statusCode || 500;
-  const isProduction = env.nodeEnv === 'production';
+  const isSafeEnv = ['production', 'staging', 'uat'].includes(env.nodeEnv);
 
   if (statusCode >= 500) {
     const logEntry = {
@@ -23,12 +23,12 @@ function globalErrorHandler(error, req, res, _next) {
       path: req?.originalUrl,
       method: req?.method,
     };
-    if (!isProduction) logEntry.stack = error.stack;
+    if (!isSafeEnv) logEntry.stack = error.stack;
     console.error('[ERROR]', logEntry);
   }
 
-  const safeMessage = statusCode >= 500 && isProduction ? 'Internal server error' : (error.message || 'Internal server error');
-  const safeDetails = isProduction ? null : (error.details || null);
+  const safeMessage = statusCode >= 500 && isSafeEnv ? 'Internal server error' : (error.message || 'Internal server error');
+  const safeDetails = isSafeEnv ? null : (error.details || null);
 
   res.status(statusCode).json({
     success: false,

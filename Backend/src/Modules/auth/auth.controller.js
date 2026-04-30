@@ -1,6 +1,8 @@
 const asyncHandler = require('../../utils/async-handler');
 const success = require('../../utils/response');
 const authService = require('./auth.service');
+const env = require('../../config/env');
+const { revokeToken } = require('../../services/token.service');
 const { setAuthCookies, clearAuthCookies } = require('../../middleware/security');
 
 function pickSessionPayload(payload, csrfToken) {
@@ -21,6 +23,12 @@ function attachCookieSession(res, payload) {
   if (!payload?.token) return payload;
   const csrfToken = setAuthCookies(res, payload.token);
   return pickSessionPayload(payload, csrfToken);
+}
+
+function readPresentedToken(req) {
+  const header = req.headers.authorization || '';
+  if (header.startsWith('Bearer ')) return header.slice(7);
+  return req.cookies?.[env.authCookieName] || '';
 }
 
 exports.register = asyncHandler(async (req, res) => {
@@ -45,11 +53,15 @@ exports.verifyLoginOtp = asyncHandler(async (req, res) => {
 
 exports.forgotPassword = asyncHandler(async (req, res) => success(res, await authService.forgotPassword(req.validated.body), 'Password reset OTP queued'));
 exports.resetPassword = asyncHandler(async (req, res) => {
+  const token = readPresentedToken(req);
+  if (token) await revokeToken(token, 'password_reset').catch(() => {});
   clearAuthCookies(res);
   return success(res, await authService.resetPassword(req.validated.body), 'Password reset successfully');
 });
 
-exports.logout = asyncHandler(async (_req, res) => {
+exports.logout = asyncHandler(async (req, res) => {
+  const token = readPresentedToken(req);
+  if (token) await revokeToken(token, 'logout').catch(() => {});
   clearAuthCookies(res);
   return success(res, { logged_out: true }, 'Logged out successfully');
 });

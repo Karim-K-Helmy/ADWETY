@@ -247,7 +247,8 @@ async function extractPrescription({ fileBuffer, mimeType, fallbackText = '' }) 
       if (fallbackText && env.aiFallbackEnabled) {
         parsed = parseRawResult({ extracted_text: fallbackText, drugs: extractCandidatesFromText(fallbackText) }, fallbackText);
       } else {
-        throw new AppError(`Prescription extraction failed: ${error.message}`, 502);
+        console.error('[AI EXTRACTION ERROR]', { message: error.message, provider: env.aiProvider });
+        throw new AppError('Prescription extraction failed. Please try again later.', 502);
       }
     }
   }

@@ -1,9 +1,10 @@
 const bcrypt = require('bcryptjs');
 const Admin = require('../../../DB/Models/admin.model');
+const User = require('../../../DB/Models/user.model');
 const Pharmacy = require('../../../DB/Models/pharmacy.model');
 const env = require('../../config/env');
 const { AppError } = require('../../utils/error-handling');
-const { validateObjectId } = require('../../utils/helpers');
+const { makePagination, validateObjectId } = require('../../utils/helpers');
 const { sanitizeEmail } = require('../../utils/security');
 
 function serializeAdmin(admin) {
@@ -42,8 +43,15 @@ async function listAdmins(query = {}) {
   const filter = {};
   if (query.role) filter.role = query.role;
   if (query.approval_status) filter.approvalStatus = query.approval_status;
-  const rows = await Admin.find(filter).sort({ role: 1, createdAt: -1 }).limit(200);
-  return rows.map(serializeAdmin);
+  const pagination = makePagination(query);
+  const [rows, total] = await Promise.all([
+    Admin.find(filter).sort({ role: 1, createdAt: -1 }).skip(pagination.skip).limit(pagination.limit),
+    Admin.countDocuments(filter),
+  ]);
+  return {
+    data: rows.map(serializeAdmin),
+    pagination: { page: pagination.page, limit: pagination.limit, total, pages: Math.ceil(total / pagination.limit) },
+  };
 }
 
 async function createAdmin(payload) {
@@ -52,8 +60,11 @@ async function createAdmin(payload) {
     throw new AppError('Owner can only create super_admin, pharmacy_admin or support_admin from this endpoint', 400);
   }
   const email = sanitizeEmail(payload.email);
-  const exists = await Admin.findOne({ email });
-  if (exists) throw new AppError('Email already exists', 409);
+  const [adminExists, userExists] = await Promise.all([
+    Admin.findOne({ email }),
+    User.findOne({ email }),
+  ]);
+  if (adminExists || userExists) throw new AppError('Email already exists', 409);
 
   const passwordHash = await bcrypt.hash(payload.password, env.bcryptSaltRounds);
   const admin = await Admin.create({
@@ -72,6 +83,7 @@ async function createAdmin(payload) {
 }
 
 async function updateAdmin(id, payload, currentOwnerId) {
+  validateObjectId(id);
   const admin = await Admin.findById(id);
   await assertCanWrite(admin, currentOwnerId);
   if (payload.full_name !== undefined) admin.fullName = payload.full_name;
@@ -90,6 +102,7 @@ async function updateAdmin(id, payload, currentOwnerId) {
 }
 
 async function deleteAdmin(id, currentOwnerId) {
+  validateObjectId(id);
   const admin = await Admin.findById(id);
   await assertCanWrite(admin, currentOwnerId);
   if (String(admin._id) === String(currentOwnerId)) throw new AppError('Owner cannot delete own account', 400);

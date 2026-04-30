@@ -19,6 +19,6 @@ module.exports = async function callCustomModel({ fileBuffer, mimeType, prompt }
     signal: AbortSignal.timeout(env.aiTimeoutMs),
   });
 
-  if (!response.ok) throw new Error(`Custom AI request failed: ${response.status} ${await response.text()}`);
+  if (!response.ok) throw new Error(`Custom AI request failed with status ${response.status}`);
   return response.json();
 };

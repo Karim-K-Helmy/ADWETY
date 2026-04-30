@@ -49,7 +49,7 @@ module.exports = async function callGemini({ fileBuffer, mimeType, prompt }) {
   });
 
   if (!response.ok) {
-    throw new Error(`Gemini request failed: ${response.status} ${await response.text()}`);
+    throw new Error(`Gemini request failed with status ${response.status}`);
   }
 
   const data = await response.json();

@@ -12,7 +12,9 @@ function ensureUploadDir() {
 
 function safeExtension(originalName = 'upload.bin') {
   const ext = path.extname(originalName).toLowerCase();
-  return ['.jpg', '.jpeg', '.png', '.webp', '.pdf'].includes(ext) ? ext : '.bin';
+  const allowed = new Set(['.jpg', '.jpeg', '.png', '.webp', '.pdf']);
+  if (!allowed.has(ext)) throw new AppError('Invalid file extension', 415);
+  return ext;
 }
 
 function saveBuffer(buffer, originalName = 'upload.bin') {

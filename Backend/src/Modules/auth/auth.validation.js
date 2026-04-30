@@ -47,11 +47,10 @@ const forgotPasswordSchema = z.object({
 
 const resetPasswordSchema = z.object({
   body: z.object({
-    email: z.string().email().max(254).optional(),
-    otp_token: otpTokenSchema.optional(),
+    otp_token: otpTokenSchema,
     otp: otpSchema,
     new_password: passwordSchema,
-  }).refine((value) => Boolean(value.email || value.otp_token), 'Email or OTP token is required'),
+  }).strict(),
   query: z.object({}).strict(),
   params: z.object({}).strict(),
 });

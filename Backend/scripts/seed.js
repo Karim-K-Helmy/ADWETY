@@ -11,6 +11,7 @@ const Inventory = require('../DB/Models/inventory.model');
 const Notification = require('../DB/Models/notification.model');
 const OtpChallenge = require('../DB/Models/otp.model');
 const RateLimit = require('../DB/Models/ratelimit.model');
+const TokenBlacklist = require('../DB/Models/tokenblacklist.model');
 
 const requiredPasswordMessage = `Missing seed password env variables.
 Set these in Backend/.env before running seed:
@@ -24,6 +25,19 @@ function assertSeedAllowed() {
   if (env.nodeEnv === 'production' && !env.allowProductionSeed) {
     throw new Error('Seeding is disabled in production. Set ALLOW_PRODUCTION_SEED=true only for a controlled maintenance window.');
   }
+
+  if (env.nodeEnv === 'production' && env.seedForceReset) {
+    const confirmation = env.confirmProductionSeedReset || process.env.CONFIRM_PRODUCTION_SEED_RESET;
+    if (confirmation !== 'I_UNDERSTAND_THIS_WILL_DELETE_ADWETY_DATA') {
+      throw new Error('Production force reset blocked. Set CONFIRM_PRODUCTION_SEED_RESET=I_UNDERSTAND_THIS_WILL_DELETE_ADWETY_DATA to continue.');
+    }
+  }
+}
+
+function validateSeedPassword(password, label) {
+  if (!password) throw new Error(`${label} is required`);
+  if (String(password).includes('replace_with')) throw new Error(`${label} contains placeholder text. Set a real password.`);
+  if (String(password).length < 16) throw new Error(`${label} must be at least 16 characters for seed accounts.`);
 }
 
 function requireSeedEnv() {
@@ -37,11 +51,16 @@ function requireSeedEnv() {
   ];
   for (const key of required) if (!env[key]) missing.push(key);
   if (missing.length) throw new Error(`${requiredPasswordMessage}\nMissing keys: ${missing.join(', ')}`);
+  validateSeedPassword(env.seedOwnerPassword, 'SEED_OWNER_PASSWORD');
+  validateSeedPassword(env.seedSuperAdminPassword, 'SEED_SUPER_ADMIN_PASSWORD');
+  validateSeedPassword(env.seedPharmacyAdminPassword, 'SEED_PHARMACY_ADMIN_PASSWORD');
+  validateSeedPassword(env.seedSupportAdminPassword, 'SEED_SUPPORT_ADMIN_PASSWORD');
+  validateSeedPassword(env.seedDemoUserPassword, 'SEED_DEMO_USER_PASSWORD');
 }
 
 async function clearCollections() {
   await Promise.all([
-    User.deleteMany({}), Admin.deleteMany({}), Category.deleteMany({}), Drug.deleteMany({}), Pharmacy.deleteMany({}), Inventory.deleteMany({}), Notification.deleteMany({}), OtpChallenge.deleteMany({}), RateLimit.deleteMany({}),
+    User.deleteMany({}), Admin.deleteMany({}), Category.deleteMany({}), Drug.deleteMany({}), Pharmacy.deleteMany({}), Inventory.deleteMany({}), Notification.deleteMany({}), OtpChallenge.deleteMany({}), RateLimit.deleteMany({}), TokenBlacklist.deleteMany({}),
   ]);
 }
 

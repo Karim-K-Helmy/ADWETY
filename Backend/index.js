@@ -10,21 +10,33 @@ const { notFoundHandler, globalErrorHandler } = require('./src/utils/error-handl
 const { corsOptions, apiLimiter, sanitizeRequest, parseCookies, csrfProtection } = require('./src/middleware/security');
 
 const app = express();
-app.set('trust proxy', 1);
+
+function resolveTrustProxy(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw || raw === 'false' || raw === '0' || raw === 'off') return false;
+  if (raw === 'true' || raw === '1') return 1;
+  return value;
+}
+
+app.set('trust proxy', resolveTrustProxy(env.trustProxy));
 app.disable('x-powered-by');
 
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: 'same-site' },
+  crossOriginResourcePolicy: { policy: 'same-origin' },
+  crossOriginOpenerPolicy: { policy: 'same-origin' },
+  crossOriginEmbedderPolicy: false,
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'"],
       styleSrc: ["'self'"],
-      imgSrc: ["'self'", 'https:'],
+      imgSrc: ["'self'", 'data:', 'https:'],
       connectSrc: ["'self'", env.frontendBaseUrl, env.frontendPublicUrl, ...env.corsOrigins],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
       frameAncestors: ["'none'"],
+      formAction: ["'self'"],
       upgradeInsecureRequests: [],
     },
   },

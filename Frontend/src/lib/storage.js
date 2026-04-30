@@ -1,20 +1,13 @@
 const SESSION_KEY = 'adwety_dashboard_session';
 const LEGACY_SESSION_KEY = 'adwety_dashboard_session';
-const VALID_ROLES = ['owner', 'super_admin', 'pharmacy_admin', 'support_admin', 'user'];
 
 function getSessionStore() {
   return window.sessionStorage;
 }
 
-function sanitizeSession(session) {
+function sanitizeSessionMarker(session) {
   if (!session || typeof session !== 'object') return null;
-  return {
-    name: session.name,
-    role: session.role,
-    accountType: session.accountType,
-    pharmacyName: session.pharmacyName || null,
-    demoMode: Boolean(session.demoMode),
-  };
+  return { authenticated: Boolean(session.authenticated ?? true) };
 }
 
 export function getStoredSession() {
@@ -26,21 +19,17 @@ export function getStoredSession() {
     }
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || !VALID_ROLES.includes(parsed.role)) {
-      clearStoredSession();
-      return null;
-    }
-    return sanitizeSession(parsed);
+    return sanitizeSessionMarker(parsed);
   } catch (_error) {
     clearStoredSession();
     return null;
   }
 }
 
-export function setStoredSession(session) {
-  const safeSession = sanitizeSession(session);
-  if (!safeSession) return;
-  getSessionStore().setItem(SESSION_KEY, JSON.stringify(safeSession));
+export function setStoredSession(session = {}) {
+  const marker = sanitizeSessionMarker(session);
+  if (!marker) return;
+  getSessionStore().setItem(SESSION_KEY, JSON.stringify(marker));
 }
 
 export function clearStoredSession() {

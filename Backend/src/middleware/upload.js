@@ -36,6 +36,14 @@ function detectMimeFromMagicBytes(buffer) {
   return null;
 }
 
+function assertPdfHasNoActiveContent(buffer) {
+  const sample = buffer.slice(0, Math.min(buffer.length, 1024 * 1024)).toString('latin1');
+  const dangerousTokens = ['/JavaScript\\b', '/JS\\b', '/OpenAction\\b', '/AA\\b', '/Launch\\b', '/EmbeddedFile\\b', '/RichMedia\\b', '/XFA\\b'].map((token) => new RegExp(token, 'i'));
+  if (dangerousTokens.some((pattern) => pattern.test(sample))) {
+    throw new AppError('PDF files with active content are not allowed.', 415);
+  }
+}
+
 function validateUploadedFileContent(file) {
   if (!file?.buffer) return;
   const detected = detectMimeFromMagicBytes(file.buffer);
@@ -45,6 +53,7 @@ function validateUploadedFileContent(file) {
   if (detected !== String(file.mimetype || '').toLowerCase()) {
     throw new AppError('MIME type mismatch detected.', 415);
   }
+  if (detected === 'application/pdf') assertPdfHasNoActiveContent(file.buffer);
 }
 
 const upload = multer({
@@ -53,5 +62,20 @@ const upload = multer({
   fileFilter,
 });
 
+function validateUploadedFileMiddleware(req, _res, next) {
+  try {
+    if (req.file) validateUploadedFileContent(req.file);
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
+function secureSingle(fieldName) {
+  return [upload.single(fieldName), validateUploadedFileMiddleware];
+}
+
 upload.validateUploadedFileContent = validateUploadedFileContent;
+upload.validateUploadedFileMiddleware = validateUploadedFileMiddleware;
+upload.secureSingle = secureSingle;
 module.exports = upload;

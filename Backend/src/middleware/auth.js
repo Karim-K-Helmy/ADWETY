@@ -5,8 +5,8 @@ const { verifyToken } = require('../services/token.service');
 const { AppError } = require('../utils/error-handling');
 
 async function resolveAccount(payload) {
-  if (payload.type === 'admin') return Admin.findById(payload.sub).select('+passwordHash');
-  if (payload.type === 'user') return User.findById(payload.sub).select('+passwordHash');
+  if (payload.type === 'admin') return Admin.findById(payload.sub);
+  if (payload.type === 'user') return User.findById(payload.sub);
   return null;
 }
 
@@ -34,7 +34,7 @@ async function authenticateRequest(req) {
   const token = readToken(req);
   if (!token) throw new AppError('Unauthorized', 401);
 
-  const payload = verifyToken(token);
+  const payload = await verifyToken(token);
   const account = await resolveAccount(payload);
 
   if (!account || account.isActive === false) throw new AppError('Unauthorized', 401);

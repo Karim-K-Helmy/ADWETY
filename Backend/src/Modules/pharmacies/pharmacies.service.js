@@ -38,8 +38,10 @@ function normalizePharmacy(pharmacy, inventoryCount = 0) {
   };
 }
 
-async function listPharmacies({ featured, q, status } = {}) {
+async function listPharmacies({ featured, q, status } = {}, authUser = null, authMeta = null) {
   const filter = {};
+  const scope = getPharmacyScope(authUser, authMeta);
+  if (scope) filter._id = scope;
   if (featured === 'true') filter.isFeatured = true;
   if (status) filter.status = status;
   if (!status) filter.status = { $in: ['approved', 'active', 'inactive'] };
